@@ -31,11 +31,11 @@ $$S_{\text{total}} = \sum_{k=1}^{K} S_{\text{team}_k}$$
 Each student ranks 3 of the 5 roles and rates their interest (1–10) for each. The score for placing student $i$ in role $r$ is:
 
 $$
-   \text{score}(i, r) = \begin{cases} 
-      \text{interest}_1 \times 3 & \text{if } r = \text{1st choice} \\ 
-      \text{interest}_2 \times 2 & \text{if } r = \text{2nd choice} \\ 
-      \text{interest}_3 \times 1 & \text{if } r = \text{3rd choice} \\ 
-      0 & \text{otherwise} 
+   \text{score}(i, r) = \begin{cases}
+      \text{interest}_1 \times 3 & \text{if } r = \text{1st choice} \\
+      \text{interest}_2 \times 2 & \text{if } r = \text{2nd choice} \\
+      \text{interest}_3 \times 1 & \text{if } r = \text{3rd choice} \\
+      0 & \text{otherwise}
       \end{cases}
 $$
 
@@ -119,7 +119,7 @@ A reference example file is provided at [`data/example.csv`](data/example.csv).
 
 ```bash
 # Clone the repo
-git clone https://github.com/<your-username>/egn3000l-team-optimizer.git
+git clone https://github.com/trevorflahardy/egn3000l-team-optimizer.git
 cd egn3000l-team-optimizer
 
 # Create a virtual environment (recommended)
