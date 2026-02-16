@@ -16,11 +16,11 @@ Each team of 5 receives a **quality score** that combines three sub-scores:
 
 $$S_{\text{team}} = w_r \cdot R + w_t \cdot T + w_m \cdot M$$
 
-| Symbol | Meaning | Default weight |
-|--------|---------|----------------|
-| $R$ | **Role-preference score** — how well the role assignment matches each student's ranked preferences | $w_r = 10$ |
-| $T$ | **Theme-cohesion score** — number of student pairs on the team who want the same robot theme | $w_t = 8$ |
-| $M$ | **Major-similarity score** — number of student pairs sharing the same engineering major | $w_m = 2$ |
+| Symbol | Meaning                                                                                            | Default weight |
+| ------ | -------------------------------------------------------------------------------------------------- | -------------- |
+| $R$    | **Role-preference score** — how well the role assignment matches each student's ranked preferences | $w_r = 10$     |
+| $T$    | **Theme-cohesion score** — number of student pairs on the team who want the same robot theme       | $w_t = 8$      |
+| $M$    | **Major-similarity score** — number of student pairs sharing the same engineering major            | $w_m = 2$      |
 
 The **global objective** is the sum of team scores across all teams:
 
@@ -71,26 +71,26 @@ The default configuration runs **15 restarts × 50 million swaps each**, which t
 
 The input is a CSV file exported from a student survey (e.g. Google Forms or Qualtrics). It must have **exactly these column headers** in any order:
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `What is your first name?` | text | Student first name |
-| `What is your last name?` | text | Student last name |
-| `What is your U#?` | text | University ID (e.g. `U12345678`) |
-| `What is your current major?` | text | e.g. `MECHANICAL ENGINEERING` |
-| `CAD Software Skill Level (1-10)` | int | Self-reported skill (informational) |
-| `3D Printing Skill Level (1-10)` | int | Self-reported skill (informational) |
-| `Coding skill level (1-10)` | int | Self-reported skill (informational) |
-| `Circuitry Skill Level (1-10)` | int | Self-reported skill (informational) |
-| `Organization Skill Level (1-10)` | int | Self-reported skill (informational) |
-| `First Appealing` | text | 1st-choice role (must match a role name exactly) |
-| `Second Appealing` | text | 2nd-choice role |
-| `Third Appealing` | text | 3rd-choice role |
-| `Your first choice interest level (1-10)` | int | Interest in 1st-choice role |
-| `Your second choice interest level (1-10)` | int | Interest in 2nd-choice role |
-| `Your third choice interest level (1-10)` | int | Interest in 3rd-choice role |
-| `Robot Design Theme` | text | Preferred theme (e.g. `Vehicle theme`, `Animals`) |
-| `Has 3D Printer?` | text | `Yes` or `No` |
-| `Total Absences` | int | Number of absences so far |
+| Column                                     | Type | Description                                       |
+| ------------------------------------------ | ---- | ------------------------------------------------- |
+| `What is your first name?`                 | text | Student first name                                |
+| `What is your last name?`                  | text | Student last name                                 |
+| `What is your U#?`                         | text | University ID (e.g. `U12345678`)                  |
+| `What is your current major?`              | text | e.g. `MECHANICAL ENGINEERING`                     |
+| `CAD Software Skill Level (1-10)`          | int  | Self-reported skill (informational)               |
+| `3D Printing Skill Level (1-10)`           | int  | Self-reported skill (informational)               |
+| `Coding skill level (1-10)`                | int  | Self-reported skill (informational)               |
+| `Circuitry Skill Level (1-10)`             | int  | Self-reported skill (informational)               |
+| `Organization Skill Level (1-10)`          | int  | Self-reported skill (informational)               |
+| `First Appealing`                          | text | 1st-choice role (must match a role name exactly)  |
+| `Second Appealing`                         | text | 2nd-choice role                                   |
+| `Third Appealing`                          | text | 3rd-choice role                                   |
+| `Your first choice interest level (1-10)`  | int  | Interest in 1st-choice role                       |
+| `Your second choice interest level (1-10)` | int  | Interest in 2nd-choice role                       |
+| `Your third choice interest level (1-10)`  | int  | Interest in 3rd-choice role                       |
+| `Robot Design Theme`                       | text | Preferred theme (e.g. `Vehicle theme`, `Animals`) |
+| `Has 3D Printer?`                          | text | `Yes` or `No`                                     |
+| `Total Absences`                           | int  | Number of absences so far                         |
 
 ### Valid role names
 
@@ -150,17 +150,17 @@ python team_optimizer.py data/my_survey.csv --absence-threshold 4
 
 ### All CLI options
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `input` (positional) | *required* | Path to input CSV |
-| `-o`, `--output` | `<input> - Output.csv` | Path for output CSV |
-| `--absence-threshold` | `3` | Absences ≥ this → worst-offender team |
-| `--w-role` | `10.0` | Weight for role-preference satisfaction |
-| `--w-theme` | `8.0` | Weight for theme cohesion |
-| `--w-major` | `2.0` | Weight for major similarity |
-| `--swaps` | `50,000,000` | Swap iterations per restart |
-| `--restarts` | `15` | Number of random restarts |
-| `--seed` | `42` | Random seed for reproducibility |
+| Flag                  | Default                | Description                             |
+| --------------------- | ---------------------- | --------------------------------------- |
+| `input` (positional)  | _required_             | Path to input CSV                       |
+| `-o`, `--output`      | `<input> - Output.csv` | Path for output CSV                     |
+| `--absence-threshold` | `3`                    | Absences ≥ this → worst-offender team   |
+| `--w-role`            | `10.0`                 | Weight for role-preference satisfaction |
+| `--w-theme`           | `8.0`                  | Weight for theme cohesion               |
+| `--w-major`           | `2.0`                  | Weight for major similarity             |
+| `--swaps`             | `50,000,000`           | Swap iterations per restart             |
+| `--restarts`          | `15`                   | Number of random restarts               |
+| `--seed`              | `42`                   | Random seed for reproducibility         |
 
 ---
 
