@@ -30,7 +30,14 @@ $$S_{\text{total}} = \sum_{k=1}^{K} S_{\text{team}_k}$$
 
 Each student ranks 3 of the 5 roles and rates their interest (1–10) for each. The score for placing student $i$ in role $r$ is:
 
-$$\text{score}(i, r) = \begin{cases} \text{interest}_1 \times 3 & \text{if } r = \text{1st choice} \\ \text{interest}_2 \times 2 & \text{if } r = \text{2nd choice} \\ \text{interest}_3 \times 1 & \text{if } r = \text{3rd choice} \\ 0 & \text{otherwise} \end{cases}$$
+$$
+   \text{score}(i, r) = \begin{cases} 
+      \text{interest}_1 \times 3 & \text{if } r = \text{1st choice} \\ 
+      \text{interest}_2 \times 2 & \text{if } r = \text{2nd choice} \\ 
+      \text{interest}_3 \times 1 & \text{if } r = \text{3rd choice} \\ 
+      0 & \text{otherwise} 
+      \end{cases}
+$$
 
 For a team of 5, the optimizer tries all $5! = 120$ permutations of role assignments and picks the one with the highest total:
 
