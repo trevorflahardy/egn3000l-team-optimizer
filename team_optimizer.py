@@ -26,8 +26,7 @@ from itertools import permutations as _py_permutations
 from collections import Counter, defaultdict
 
 import numpy as np
-from numba import njit, types, int32, int64, float64, boolean
-from numba.typed import List as NumbaList
+from numba import njit, int32, float64
 
 # ═══════════════════════════════════════════════════════════════
 # Configuration
