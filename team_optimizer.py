@@ -21,8 +21,13 @@ import csv
 import random
 import os
 import sys
-from itertools import permutations
+import time
+from itertools import permutations as _py_permutations
 from collections import Counter, defaultdict
+
+import numpy as np
+from numba import njit, types, int32, int64, float64, boolean
+from numba.typed import List as NumbaList
 
 # ═══════════════════════════════════════════════════════════════
 # Configuration
@@ -43,8 +48,8 @@ W_ROLE = 10.0  # role-preference satisfaction
 W_THEME = 8.0  # robot-theme cohesion
 W_MAJOR = 2.0  # major similarity
 
-SWAP_ITERATIONS = 300_000  # local-search budget
-NUM_RESTARTS = 5  # full greedy+search restarts
+SWAP_ITERATIONS = 10_000_000  # local-search budget
+NUM_RESTARTS = 10  # full greedy+search restarts
 RANDOM_SEED = 42
 
 
@@ -101,6 +106,207 @@ def load_students(path: str) -> list[dict]:
     return students
 
 
+# ═══════════════════════════════════════════════════════════════
+# Precomputed numerical arrays  (built once, used by Numba)
+# ═══════════════════════════════════════════════════════════════
+# All 120 permutations of [0..4] — shape (120, 5), dtype int32
+_PERMS = np.array(list(_py_permutations(range(TEAM_SIZE))), dtype=np.int32)
+
+
+def build_arrays(students: list[dict]):
+    """
+    Convert the list-of-dicts into flat NumPy arrays for the JIT kernel.
+    Returns a dict with arrays keyed by name.
+    """
+    n = len(students)
+    # role_score_matrix[i, r] = score if student i is placed in role r
+    rsm = np.zeros((n, TEAM_SIZE), dtype=np.int32)
+    role_idx = {r: j for j, r in enumerate(ROLES)}
+
+    # theme / major  → integer id  (0 = none)
+    theme_map: dict[str, int] = {}
+    major_map: dict[str, int] = {}
+    theme_ids = np.zeros(n, dtype=np.int32)
+    major_ids = np.zeros(n, dtype=np.int32)
+    printer = np.zeros(n, dtype=np.int8)
+
+    for s in students:
+        i = s["id"]
+        # role score matrix
+        for r_idx, role in enumerate(ROLES):
+            if not s["has_data"]:
+                rsm[i, r_idx] = 1
+            elif s["choice1"] == role:
+                rsm[i, r_idx] = s["interest1"] * 3
+            elif s["choice2"] == role:
+                rsm[i, r_idx] = s["interest2"] * 2
+            elif s["choice3"] == role:
+                rsm[i, r_idx] = s["interest3"] * 1
+            else:
+                rsm[i, r_idx] = 0
+
+        # theme → int
+        th = s["theme"]
+        if th:
+            if th not in theme_map:
+                theme_map[th] = len(theme_map) + 1
+            theme_ids[i] = theme_map[th]
+
+        # major → int
+        m = normalize_major(s["major"])
+        if m and m != "UNKNOWN":
+            if m not in major_map:
+                major_map[m] = len(major_map) + 1
+            major_ids[i] = major_map[m]
+
+        printer[i] = 1 if s["has_printer"] else 0
+
+    return dict(
+        rsm=rsm, theme_ids=theme_ids, major_ids=major_ids, printer=printer, perms=_PERMS
+    )
+
+
+# ═══════════════════════════════════════════════════════════════
+# Numba-accelerated scoring
+# ═══════════════════════════════════════════════════════════════
+@njit(int32(int32[:, :], int32[:], int32[:, :]), cache=True)
+def _fast_best_role_score(rsm, team_ids, perms):
+    """Return the best role-assignment score for a team of 5 student ids."""
+    best = -1
+    for pi in range(perms.shape[0]):  # 120 iterations
+        s = int32(0)
+        for r in range(5):
+            s += rsm[team_ids[perms[pi, r]], r]
+        if s > best:
+            best = s
+    return best
+
+
+@njit(int32(int32[:], int32[:]), cache=True)
+def _count_pairs(ids, attr):
+    """Count matching-attribute pairs in a team of 5."""
+    pairs = int32(0)
+    for i in range(5):
+        ai = attr[ids[i]]
+        if ai == 0:
+            continue
+        for j in range(i + 1, 5):
+            if attr[ids[j]] == ai:
+                pairs += 1
+    return pairs
+
+
+@njit(
+    float64(
+        int32[:, :],
+        int32[:],
+        int32[:],
+        int32[:],
+        int32[:, :],
+        float64,
+        float64,
+        float64,
+    ),
+    cache=True,
+)
+def _fast_team_score(
+    rsm, team_ids, theme_ids, major_ids, perms, w_role, w_theme, w_major
+):
+    rs = _fast_best_role_score(rsm, team_ids, perms)
+    tp = _count_pairs(team_ids, theme_ids)
+    mp = _count_pairs(team_ids, major_ids)
+    return w_role * rs + w_theme * tp + w_major * mp
+
+
+@njit(cache=True)
+def _fast_local_search(
+    team_arr,
+    rsm,
+    theme_ids,
+    major_ids,
+    printer,
+    perms,
+    w_role,
+    w_theme,
+    w_major,
+    iters,
+    allow_double,
+    seed,
+):
+    """
+    Numba-accelerated pairwise-swap hill climber.
+    team_arr : int32[n_teams, 5]  — student IDs per team
+    Returns  : (team_arr, improved_count, total_score)
+    """
+    np.random.seed(seed)
+    n_teams = team_arr.shape[0]
+    if n_teams < 2:
+        return team_arr, 0, 0.0
+
+    # pre-compute team scores
+    scores = np.empty(n_teams, dtype=np.float64)
+    for t in range(n_teams):
+        scores[t] = _fast_team_score(
+            rsm, team_arr[t], theme_ids, major_ids, perms, w_role, w_theme, w_major
+        )
+
+    improved = 0
+    for _ in range(iters):
+        # pick two distinct teams
+        t1 = np.random.randint(0, n_teams)
+        t2 = np.random.randint(0, n_teams - 1)
+        if t2 >= t1:
+            t2 += 1
+        i1 = np.random.randint(0, 5)
+        i2 = np.random.randint(0, 5)
+
+        a = team_arr[t1, i1]
+        b = team_arr[t2, i2]
+
+        # printer guard
+        if not allow_double:
+            if printer[b] == 1:
+                cnt = int32(0)
+                for k in range(5):
+                    sid = b if k == i1 else team_arr[t1, k]
+                    cnt += printer[sid]
+                if cnt > 1:
+                    continue
+            if printer[a] == 1:
+                cnt = int32(0)
+                for k in range(5):
+                    sid = a if k == i2 else team_arr[t2, k]
+                    cnt += printer[sid]
+                if cnt > 1:
+                    continue
+
+        # tentative swap
+        team_arr[t1, i1] = b
+        team_arr[t2, i2] = a
+        ns1 = _fast_team_score(
+            rsm, team_arr[t1], theme_ids, major_ids, perms, w_role, w_theme, w_major
+        )
+        ns2 = _fast_team_score(
+            rsm, team_arr[t2], theme_ids, major_ids, perms, w_role, w_theme, w_major
+        )
+
+        if ns1 + ns2 > scores[t1] + scores[t2]:
+            scores[t1] = ns1
+            scores[t2] = ns2
+            improved += 1
+        else:
+            team_arr[t1, i1] = a
+            team_arr[t2, i2] = b
+
+    total = 0.0
+    for t in range(n_teams):
+        total += scores[t]
+    return team_arr, improved, total
+
+
+# ═══════════════════════════════════════════════════════════════
+# Python wrappers (used outside the hot loop)
+# ═══════════════════════════════════════════════════════════════
 def role_score(student: dict, role: str) -> int:
     """
     How well *role* matches *student*'s preferences.
@@ -123,12 +329,11 @@ def best_role_assignment(team: list[dict]):
     Returns (score, {role: student}).
     """
     if len(team) != TEAM_SIZE:
-        # partial team — just map positionally
         asgn = {ROLES[j]: team[j] for j in range(len(team))}
         return 0, asgn
 
     best, best_p = -1, None
-    for p in permutations(range(TEAM_SIZE)):
+    for p in _py_permutations(range(TEAM_SIZE)):
         s = sum(role_score(team[p[r]], ROLES[r]) for r in range(TEAM_SIZE))
         if s > best:
             best, best_p = s, p
@@ -251,65 +456,60 @@ def _greedy_form_teams(pool: list[dict], allow_printer_double: bool):
 
 
 # ═══════════════════════════════════════════════════════════════
-# Local search — pairwise swap hill-climber
+# Local search — Numba-accelerated pairwise swap hill-climber
 # ═══════════════════════════════════════════════════════════════
-def _local_search(teams, iters, allow_printer_double):
-    # Only optimise full-sized teams (skip partial / bad teams)
-    full_idx = [i for i, t in enumerate(teams) if len(t) == TEAM_SIZE]
-    if len(full_idx) < 2:
+def _local_search(teams, iters, allow_printer_double, arrays, rng_seed=0):
+    """
+    Delegates to the @njit kernel for speed.
+    *teams* is a list of list[dict].  Only full-sized teams are optimised;
+    partial/bad teams pass through untouched.
+    """
+    full_teams = [t for t in teams if len(t) == TEAM_SIZE]
+    other_teams = [t for t in teams if len(t) != TEAM_SIZE]
+    if len(full_teams) < 2:
         return teams
-    scores = [team_score(t) for t in teams]
-    improved = 0
 
-    for _ in range(iters):
-        t1, t2 = random.sample(full_idx, 2)
-        i1 = random.randint(0, TEAM_SIZE - 1)
-        i2 = random.randint(0, TEAM_SIZE - 1)
+    # build int32 team array  (n_full × 5)
+    team_arr = np.array([[s["id"] for s in t] for t in full_teams], dtype=np.int32)
 
-        a, b = teams[t1][i1], teams[t2][i2]
+    t0 = time.perf_counter()
+    team_arr, improved, total = _fast_local_search(
+        team_arr,
+        arrays["rsm"],
+        arrays["theme_ids"],
+        arrays["major_ids"],
+        arrays["printer"],
+        arrays["perms"],
+        W_ROLE,
+        W_THEME,
+        W_MAJOR,
+        iters,
+        allow_printer_double,
+        rng_seed,
+    )
+    elapsed = time.perf_counter() - t0
+    print(
+        f"    swaps accepted: {improved},  total score: {total:.0f}"
+        f"  ({elapsed:.2f}s, {iters/elapsed/1e6:.1f}M iter/s)"
+    )
 
-        # printer guard after swap
-        if not allow_printer_double:
-            if (
-                b["has_printer"]
-                and sum(
-                    1
-                    for k, m in enumerate(teams[t1])
-                    if (m if k != i1 else b)["has_printer"]
-                )
-                > 1
-            ):
-                continue
-            if (
-                a["has_printer"]
-                and sum(
-                    1
-                    for k, m in enumerate(teams[t2])
-                    if (m if k != i2 else a)["has_printer"]
-                )
-                > 1
-            ):
-                continue
+    # rebuild list-of-dicts teams from the optimised int array
+    id_to_student = {}
+    for t in full_teams:
+        for s in t:
+            id_to_student[s["id"]] = s
 
-        teams[t1][i1], teams[t2][i2] = b, a
-        ns1 = team_score(teams[t1])
-        ns2 = team_score(teams[t2])
+    new_full = []
+    for ti in range(team_arr.shape[0]):
+        new_full.append([id_to_student[int(team_arr[ti, j])] for j in range(TEAM_SIZE)])
 
-        if ns1 + ns2 > scores[t1] + scores[t2]:
-            scores[t1], scores[t2] = ns1, ns2
-            improved += 1
-        else:
-            teams[t1][i1], teams[t2][i2] = a, b  # revert
-
-    total = sum(s for s in scores if s > -1e8)  # exclude partial teams
-    print(f"    swaps accepted: {improved},  total score: {total:.0f}")
-    return teams
+    return new_full + other_teams
 
 
 # ═══════════════════════════════════════════════════════════════
 # Full pipeline (one run)
 # ═══════════════════════════════════════════════════════════════
-def _build_solution(students, verbose=True):
+def _build_solution(students, arrays, rng_seed=0, verbose=True):
     """
     Execute the full team-formation pipeline once for the current
     random state.  Returns (all_teams, all_assignments, total_score).
@@ -396,8 +596,10 @@ def _build_solution(students, verbose=True):
                 )
             good_teams.append(final_left)
 
-    # -- Step 7: local search ---------------------------------------------
-    good_teams = _local_search(good_teams, SWAP_ITERATIONS, allow_double)
+    # -- Step 7: local search (Numba-accelerated) -------------------------
+    good_teams = _local_search(
+        good_teams, SWAP_ITERATIONS, allow_double, arrays, rng_seed=rng_seed
+    )
 
     # -- Combine (good first, bad last) -----------------------------------
     all_teams = good_teams + bad_teams
@@ -545,14 +747,42 @@ def main():
     )
     print(f"No-data fillers       : {no_data_count}")
 
-    # ── Multi-restart ───────────────────────────────────────────
+    # ── Build numerical arrays & JIT warm-up ─────────────────────────────
+    print("\nPrecomputing arrays & compiling Numba kernels …", end=" ", flush=True)
+    t_jit = time.perf_counter()
+    arrays = build_arrays(students)
+    # Warm up the JIT with a tiny dummy run so compilation time
+    # doesn't count against the first restart.
+    _dummy = np.zeros((2, 5), dtype=np.int32)
+    _fast_local_search(
+        _dummy,
+        arrays["rsm"],
+        arrays["theme_ids"],
+        arrays["major_ids"],
+        arrays["printer"],
+        arrays["perms"],
+        W_ROLE,
+        W_THEME,
+        W_MAJOR,
+        1,
+        True,
+        0,
+    )
+    print(f"done ({time.perf_counter() - t_jit:.1f}s)")
+
+    # ── Multi-restart ─────────────────────────────────────────────
     print(f"\nRunning {NUM_RESTARTS} restarts × {SWAP_ITERATIONS:,} swaps …")
     best_teams, best_asgn, best_total = None, None, -1e18
 
     for restart in range(NUM_RESTARTS):
         random.seed(RANDOM_SEED + restart)
         print(f"\n  — Restart {restart + 1}/{NUM_RESTARTS} —")
-        teams, asgns, total = _build_solution(students, verbose=(restart == 0))
+        teams, asgns, total = _build_solution(
+            students,
+            arrays,
+            rng_seed=RANDOM_SEED + restart,
+            verbose=(restart == 0),
+        )
         print(f"    Total score: {total:.0f}")
         if total > best_total:
             best_total = total
