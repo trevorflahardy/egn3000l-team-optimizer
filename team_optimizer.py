@@ -47,8 +47,8 @@ W_ROLE = 10.0  # role-preference satisfaction
 W_THEME = 8.0  # robot-theme cohesion
 W_MAJOR = 2.0  # major similarity
 
-SWAP_ITERATIONS = 10_000_000  # local-search budget
-NUM_RESTARTS = 10  # full greedy+search restarts
+SWAP_ITERATIONS = 50_000_000  # local-search budget
+NUM_RESTARTS = 15  # full greedy+search restarts
 RANDOM_SEED = 42
 
 
