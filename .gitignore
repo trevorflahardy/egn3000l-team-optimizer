@@ -1,1 +1,32 @@
-__pycache__/**
+# Student data — contains PII (names, U-numbers, etc.)
+data/*
+!data/.gitkeep
+!data/example.csv
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Numba cache
+*.nbc
+*.nbi
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store

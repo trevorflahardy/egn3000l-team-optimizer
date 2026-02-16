@@ -17,6 +17,7 @@ Output: CSV with one row per team, columns = the five role names,
         cells = student full names.
 """
 
+import argparse
 import csv
 import random
 import os
@@ -29,7 +30,7 @@ import numpy as np
 from numba import njit, int32, float64
 
 # ═══════════════════════════════════════════════════════════════
-# Configuration
+# Default configuration (can be overridden via CLI)
 # ═══════════════════════════════════════════════════════════════
 ROLES = [
     "Design Engineering Lead",
@@ -40,16 +41,16 @@ ROLES = [
 ]
 
 TEAM_SIZE = 5
-ABSENCE_THRESHOLD = 3  # >= this  ->  worst offender
+DEFAULT_ABSENCE_THRESHOLD = 3  # >= this  ->  worst offender
 
-# Weights for the combined team-quality score
-W_ROLE = 10.0  # role-preference satisfaction
-W_THEME = 8.0  # robot-theme cohesion
-W_MAJOR = 2.0  # major similarity
+# Default weights for the combined team-quality score
+DEFAULT_W_ROLE = 10.0   # role-preference satisfaction
+DEFAULT_W_THEME = 8.0   # robot-theme cohesion
+DEFAULT_W_MAJOR = 2.0   # major similarity
 
-SWAP_ITERATIONS = 50_000_000  # local-search budget
-NUM_RESTARTS = 15  # full greedy+search restarts
-RANDOM_SEED = 42
+DEFAULT_SWAP_ITERATIONS = 50_000_000   # local-search budget
+DEFAULT_NUM_RESTARTS = 15              # full greedy+search restarts
+DEFAULT_RANDOM_SEED = 42
 
 
 def _int(val):
@@ -356,12 +357,18 @@ def _major_pairs(team):
     return sum(c * (c - 1) // 2 for c in Counter(majors).values())
 
 
-def team_score(team):
+def team_score(team, w_role=None, w_theme=None, w_major=None):
     """Combined quality metric."""
+    if w_role is None:
+        w_role = DEFAULT_W_ROLE
+    if w_theme is None:
+        w_theme = DEFAULT_W_THEME
+    if w_major is None:
+        w_major = DEFAULT_W_MAJOR
     if len(team) != TEAM_SIZE:
         return -1e9
     rs, _ = best_role_assignment(team)
-    return W_ROLE * rs + W_THEME * _theme_pairs(team) + W_MAJOR * _major_pairs(team)
+    return w_role * rs + w_theme * _theme_pairs(team) + w_major * _major_pairs(team)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -457,12 +464,19 @@ def _greedy_form_teams(pool: list[dict], allow_printer_double: bool):
 # ═══════════════════════════════════════════════════════════════
 # Local search — Numba-accelerated pairwise swap hill-climber
 # ═══════════════════════════════════════════════════════════════
-def _local_search(teams, iters, allow_printer_double, arrays, rng_seed=0):
+def _local_search(teams, iters, allow_printer_double, arrays,
+                   w_role=None, w_theme=None, w_major=None, rng_seed=0):
     """
     Delegates to the @njit kernel for speed.
     *teams* is a list of list[dict].  Only full-sized teams are optimised;
     partial/bad teams pass through untouched.
     """
+    if w_role is None:
+        w_role = DEFAULT_W_ROLE
+    if w_theme is None:
+        w_theme = DEFAULT_W_THEME
+    if w_major is None:
+        w_major = DEFAULT_W_MAJOR
     full_teams = [t for t in teams if len(t) == TEAM_SIZE]
     other_teams = [t for t in teams if len(t) != TEAM_SIZE]
     if len(full_teams) < 2:
@@ -479,9 +493,9 @@ def _local_search(teams, iters, allow_printer_double, arrays, rng_seed=0):
         arrays["major_ids"],
         arrays["printer"],
         arrays["perms"],
-        W_ROLE,
-        W_THEME,
-        W_MAJOR,
+        w_role,
+        w_theme,
+        w_major,
         iters,
         allow_printer_double,
         rng_seed,
@@ -508,7 +522,7 @@ def _local_search(teams, iters, allow_printer_double, arrays, rng_seed=0):
 # ═══════════════════════════════════════════════════════════════
 # Full pipeline (one run)
 # ═══════════════════════════════════════════════════════════════
-def _build_solution(students, arrays, rng_seed=0, verbose=True):
+def _build_solution(students, arrays, cfg, rng_seed=0, verbose=True):
     """
     Execute the full team-formation pipeline once for the current
     random state.  Returns (all_teams, all_assignments, total_score).
@@ -523,10 +537,10 @@ def _build_solution(students, arrays, rng_seed=0, verbose=True):
 
     # -- Step 1: worst offenders -----------------------------------------
     offenders = sorted(
-        [s for s in students if s["absences"] >= ABSENCE_THRESHOLD],
+        [s for s in students if s["absences"] >= cfg["absence_threshold"]],
         key=lambda s: -s["absences"],
     )
-    rest = [s for s in students if s["absences"] < ABSENCE_THRESHOLD]
+    rest = [s for s in students if s["absences"] < cfg["absence_threshold"]]
 
     # -- Step 2: filler students (no survey data, not offenders) ----------
     filler = [s for s in rest if not s["has_data"]]
@@ -597,7 +611,9 @@ def _build_solution(students, arrays, rng_seed=0, verbose=True):
 
     # -- Step 7: local search (Numba-accelerated) -------------------------
     good_teams = _local_search(
-        good_teams, SWAP_ITERATIONS, allow_double, arrays, rng_seed=rng_seed
+        good_teams, cfg["swap_iterations"], allow_double, arrays,
+        w_role=cfg["w_role"], w_theme=cfg["w_theme"], w_major=cfg["w_major"],
+        rng_seed=rng_seed,
     )
 
     # -- Combine (good first, bad last) -----------------------------------
@@ -609,14 +625,19 @@ def _build_solution(students, arrays, rng_seed=0, verbose=True):
         _, asgn = best_role_assignment(team)
         all_assignments.append(asgn)
 
-    total = sum(team_score(t) for t in all_teams if len(t) == TEAM_SIZE)
+    total = sum(
+        team_score(t, w_role=cfg["w_role"], w_theme=cfg["w_theme"], w_major=cfg["w_major"])
+        for t in all_teams if len(t) == TEAM_SIZE
+    )
     return all_teams, all_assignments, total
 
 
 # ═══════════════════════════════════════════════════════════════
 # Validation
 # ═══════════════════════════════════════════════════════════════
-def validate(teams, all_students, verbose=True):
+def validate(teams, all_students, absence_threshold=None, verbose=True):
+    if absence_threshold is None:
+        absence_threshold = DEFAULT_ABSENCE_THRESHOLD
     errors: list[str] = []
 
     # duplicates / missing
@@ -642,10 +663,10 @@ def validate(teams, all_students, verbose=True):
     num_bad = sum(
         1
         for t in teams
-        if any(s["absences"] >= ABSENCE_THRESHOLD for s in t) and len(t) < TEAM_SIZE
+        if any(s["absences"] >= absence_threshold for s in t) and len(t) < TEAM_SIZE
     )
     for i, t in enumerate(teams):
-        is_bad = any(s["absences"] >= ABSENCE_THRESHOLD for s in t)
+        is_bad = any(s["absences"] >= absence_threshold for s in t)
         if len(t) != TEAM_SIZE and not is_bad:
             errors.append(f"Team {i+1} has {len(t)} members (expected {TEAM_SIZE})")
         elif len(t) != TEAM_SIZE and is_bad and verbose:
@@ -682,12 +703,14 @@ def write_output(teams, assignments, path):
             w.writerow([asgn.get(r, {}).get("name", "") for r in ROLES])
 
 
-def print_team_detail(teams, assignments):
+def print_team_detail(teams, assignments, absence_threshold=None):
+    if absence_threshold is None:
+        absence_threshold = DEFAULT_ABSENCE_THRESHOLD
     for i, (team, asgn) in enumerate(zip(teams, assignments)):
         themes = Counter(s["theme"] for s in team if s["theme"])
         top_th = themes.most_common(1)[0][0] if themes else "N/A"
         rs, _ = best_role_assignment(team) if len(team) == TEAM_SIZE else (0, None)
-        is_bad = any(s["absences"] >= ABSENCE_THRESHOLD for s in team)
+        is_bad = any(s["absences"] >= absence_threshold for s in team)
         label = f"Team {i+1}" + (" [ABSENT GROUP]" if is_bad else "")
         print(f"\n  {label}  (role_score={rs}, theme={top_th})")
         for role in ROLES:
@@ -713,12 +736,100 @@ def print_team_detail(teams, assignments):
 
 
 # ═══════════════════════════════════════════════════════════════
+# CLI argument parsing
+# ═══════════════════════════════════════════════════════════════
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description="EGN3000L Team Formation Optimizer — creates optimal "
+        "student teams from survey CSV data.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+examples:
+  python team_optimizer.py data/survey.csv
+  python team_optimizer.py data/survey.csv -o data/teams.csv
+  python team_optimizer.py data/survey.csv --restarts 25 --swaps 100000000
+  python team_optimizer.py data/survey.csv --w-role 12 --w-theme 6 --w-major 3
+""",
+    )
+    parser.add_argument(
+        "input", help="Path to the input CSV file with student survey responses"
+    )
+    parser.add_argument(
+        "-o", "--output",
+        default=None,
+        help="Path for the output CSV (default: <input_stem> - Output.csv)",
+    )
+    parser.add_argument(
+        "--absence-threshold",
+        type=int,
+        default=DEFAULT_ABSENCE_THRESHOLD,
+        help=f"Absences >= this mark a student as a worst offender "
+        f"(default: {DEFAULT_ABSENCE_THRESHOLD})",
+    )
+    parser.add_argument(
+        "--w-role",
+        type=float,
+        default=DEFAULT_W_ROLE,
+        help=f"Weight for role-preference satisfaction (default: {DEFAULT_W_ROLE})",
+    )
+    parser.add_argument(
+        "--w-theme",
+        type=float,
+        default=DEFAULT_W_THEME,
+        help=f"Weight for robot-theme cohesion (default: {DEFAULT_W_THEME})",
+    )
+    parser.add_argument(
+        "--w-major",
+        type=float,
+        default=DEFAULT_W_MAJOR,
+        help=f"Weight for major similarity (default: {DEFAULT_W_MAJOR})",
+    )
+    parser.add_argument(
+        "--swaps",
+        type=int,
+        default=DEFAULT_SWAP_ITERATIONS,
+        help=f"Number of swap iterations per restart (default: {DEFAULT_SWAP_ITERATIONS:,})",
+    )
+    parser.add_argument(
+        "--restarts",
+        type=int,
+        default=DEFAULT_NUM_RESTARTS,
+        help=f"Number of random restarts (default: {DEFAULT_NUM_RESTARTS})",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=DEFAULT_RANDOM_SEED,
+        help=f"Random seed for reproducibility (default: {DEFAULT_RANDOM_SEED})",
+    )
+    args = parser.parse_args(argv)
+
+    # Default output path: same directory as input, with " - Output" suffix
+    if args.output is None:
+        stem, ext = os.path.splitext(args.input)
+        args.output = f"{stem} - Output{ext}"
+
+    return args
+
+
+# ═══════════════════════════════════════════════════════════════
 # Main
 # ═══════════════════════════════════════════════════════════════
-def main():
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    input_path = os.path.join(script_dir, "S.26 EGN3000L Teams.csv")
-    output_path = os.path.join(script_dir, "S.26 EGN3000L Teams - Output.csv")
+def main(argv=None):
+    args = parse_args(argv)
+
+    cfg = dict(
+        absence_threshold=args.absence_threshold,
+        w_role=args.w_role,
+        w_theme=args.w_theme,
+        w_major=args.w_major,
+        swap_iterations=args.swaps,
+        num_restarts=args.restarts,
+        seed=args.seed,
+    )
+
+    input_path = args.input
+    output_path = args.output
 
     # ── Load ────────────────────────────────────────────────────
     print("=" * 65)
@@ -736,13 +847,13 @@ def main():
     printer_count = sum(1 for s in students if s["has_printer"])
     print(f"3D-printer owners     : {printer_count}")
     print(f"Allow doubles         : {printer_count >= total_teams}")
-    print(f"Worst-offender cutoff : {ABSENCE_THRESHOLD}+ absences")
-    offender_count = sum(1 for s in students if s["absences"] >= ABSENCE_THRESHOLD)
+    print(f"Worst-offender cutoff : {cfg['absence_threshold']}+ absences")
+    offender_count = sum(1 for s in students if s["absences"] >= cfg["absence_threshold"])
     print(f"Worst offenders       : {offender_count}")
     no_data_count = sum(
         1
         for s in students
-        if not bool(s["choice1"]) and s["absences"] < ABSENCE_THRESHOLD
+        if not bool(s["choice1"]) and s["absences"] < cfg["absence_threshold"]
     )
     print(f"No-data fillers       : {no_data_count}")
 
@@ -760,9 +871,9 @@ def main():
         arrays["major_ids"],
         arrays["printer"],
         arrays["perms"],
-        W_ROLE,
-        W_THEME,
-        W_MAJOR,
+        cfg["w_role"],
+        cfg["w_theme"],
+        cfg["w_major"],
         1,
         True,
         0,
@@ -770,16 +881,17 @@ def main():
     print(f"done ({time.perf_counter() - t_jit:.1f}s)")
 
     # ── Multi-restart ─────────────────────────────────────────────
-    print(f"\nRunning {NUM_RESTARTS} restarts × {SWAP_ITERATIONS:,} swaps …")
+    print(f"\nRunning {cfg['num_restarts']} restarts × {cfg['swap_iterations']:,} swaps …")
     best_teams, best_asgn, best_total = None, None, -1e18
 
-    for restart in range(NUM_RESTARTS):
-        random.seed(RANDOM_SEED + restart)
-        print(f"\n  — Restart {restart + 1}/{NUM_RESTARTS} —")
+    for restart in range(cfg["num_restarts"]):
+        random.seed(cfg["seed"] + restart)
+        print(f"\n  — Restart {restart + 1}/{cfg['num_restarts']} —")
         teams, asgns, total = _build_solution(
             students,
             arrays,
-            rng_seed=RANDOM_SEED + restart,
+            cfg,
+            rng_seed=cfg["seed"] + restart,
             verbose=(restart == 0),
         )
         print(f"    Total score: {total:.0f}")
@@ -794,11 +906,11 @@ def main():
 
     # ── Detailed output ─────────────────────────────────────────
     print("\nFinal Teams:")
-    print_team_detail(best_teams, best_asgn)
+    print_team_detail(best_teams, best_asgn, absence_threshold=cfg["absence_threshold"])
 
     # ── Validate ────────────────────────────────────────────────
     print("\n\nValidation:")
-    errors = validate(best_teams, students)
+    errors = validate(best_teams, students, absence_threshold=cfg["absence_threshold"])
 
     # ── Summary stats ───────────────────────────────────────────
     with_data = [s for s in students if s["has_data"]]
