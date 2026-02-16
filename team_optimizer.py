@@ -44,12 +44,12 @@ TEAM_SIZE = 5
 DEFAULT_ABSENCE_THRESHOLD = 3  # >= this  ->  worst offender
 
 # Default weights for the combined team-quality score
-DEFAULT_W_ROLE = 10.0   # role-preference satisfaction
-DEFAULT_W_THEME = 8.0   # robot-theme cohesion
-DEFAULT_W_MAJOR = 2.0   # major similarity
+DEFAULT_W_ROLE = 10.0  # role-preference satisfaction
+DEFAULT_W_THEME = 8.0  # robot-theme cohesion
+DEFAULT_W_MAJOR = 2.0  # major similarity
 
-DEFAULT_SWAP_ITERATIONS = 50_000_000   # local-search budget
-DEFAULT_NUM_RESTARTS = 15              # full greedy+search restarts
+DEFAULT_SWAP_ITERATIONS = 50_000_000  # local-search budget
+DEFAULT_NUM_RESTARTS = 15  # full greedy+search restarts
 DEFAULT_RANDOM_SEED = 42
 
 
@@ -464,8 +464,16 @@ def _greedy_form_teams(pool: list[dict], allow_printer_double: bool):
 # ═══════════════════════════════════════════════════════════════
 # Local search — Numba-accelerated pairwise swap hill-climber
 # ═══════════════════════════════════════════════════════════════
-def _local_search(teams, iters, allow_printer_double, arrays,
-                   w_role=None, w_theme=None, w_major=None, rng_seed=0):
+def _local_search(
+    teams,
+    iters,
+    allow_printer_double,
+    arrays,
+    w_role=None,
+    w_theme=None,
+    w_major=None,
+    rng_seed=0,
+):
     """
     Delegates to the @njit kernel for speed.
     *teams* is a list of list[dict].  Only full-sized teams are optimised;
@@ -611,8 +619,13 @@ def _build_solution(students, arrays, cfg, rng_seed=0, verbose=True):
 
     # -- Step 7: local search (Numba-accelerated) -------------------------
     good_teams = _local_search(
-        good_teams, cfg["swap_iterations"], allow_double, arrays,
-        w_role=cfg["w_role"], w_theme=cfg["w_theme"], w_major=cfg["w_major"],
+        good_teams,
+        cfg["swap_iterations"],
+        allow_double,
+        arrays,
+        w_role=cfg["w_role"],
+        w_theme=cfg["w_theme"],
+        w_major=cfg["w_major"],
         rng_seed=rng_seed,
     )
 
@@ -626,8 +639,11 @@ def _build_solution(students, arrays, cfg, rng_seed=0, verbose=True):
         all_assignments.append(asgn)
 
     total = sum(
-        team_score(t, w_role=cfg["w_role"], w_theme=cfg["w_theme"], w_major=cfg["w_major"])
-        for t in all_teams if len(t) == TEAM_SIZE
+        team_score(
+            t, w_role=cfg["w_role"], w_theme=cfg["w_theme"], w_major=cfg["w_major"]
+        )
+        for t in all_teams
+        if len(t) == TEAM_SIZE
     )
     return all_teams, all_assignments, total
 
@@ -755,7 +771,8 @@ examples:
         "input", help="Path to the input CSV file with student survey responses"
     )
     parser.add_argument(
-        "-o", "--output",
+        "-o",
+        "--output",
         default=None,
         help="Path for the output CSV (default: <input_stem> - Output.csv)",
     )
@@ -848,7 +865,9 @@ def main(argv=None):
     print(f"3D-printer owners     : {printer_count}")
     print(f"Allow doubles         : {printer_count >= total_teams}")
     print(f"Worst-offender cutoff : {cfg['absence_threshold']}+ absences")
-    offender_count = sum(1 for s in students if s["absences"] >= cfg["absence_threshold"])
+    offender_count = sum(
+        1 for s in students if s["absences"] >= cfg["absence_threshold"]
+    )
     print(f"Worst offenders       : {offender_count}")
     no_data_count = sum(
         1
@@ -881,7 +900,9 @@ def main(argv=None):
     print(f"done ({time.perf_counter() - t_jit:.1f}s)")
 
     # ── Multi-restart ─────────────────────────────────────────────
-    print(f"\nRunning {cfg['num_restarts']} restarts × {cfg['swap_iterations']:,} swaps …")
+    print(
+        f"\nRunning {cfg['num_restarts']} restarts × {cfg['swap_iterations']:,} swaps …"
+    )
     best_teams, best_asgn, best_total = None, None, -1e18
 
     for restart in range(cfg["num_restarts"]):
